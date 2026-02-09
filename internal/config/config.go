@@ -27,6 +27,10 @@ type Config struct {
 	AnthropicToken     string // ANTHROPIC_TOKEN or auto-detected
 	AnthropicAutoToken bool   // true if token was auto-detected
 
+	// Antigravity provider configuration
+	AntigravityAPIKey  string // ANTIGRAVITY_API_KEY
+	AntigravityBaseURL string // ANTIGRAVITY_BASE_URL
+
 	// Shared configuration
 	PollInterval       time.Duration // ONWATCH_POLL_INTERVAL (seconds → Duration)
 	Port               int           // ONWATCH_PORT
@@ -132,6 +136,10 @@ func loadFromEnvAndFlags(flags *flagValues) (*Config, error) {
 	// Anthropic provider
 	cfg.AnthropicToken = os.Getenv("ANTHROPIC_TOKEN")
 
+	// Antigravity provider
+	cfg.AntigravityAPIKey = os.Getenv("ANTIGRAVITY_API_KEY")
+	cfg.AntigravityBaseURL = os.Getenv("ANTIGRAVITY_BASE_URL")
+
 	// Poll Interval (seconds) — ONWATCH_* first, SYNTRACK_* fallback
 	if flags.interval > 0 {
 		cfg.PollInterval = time.Duration(flags.interval) * time.Second
@@ -223,6 +231,9 @@ func (c *Config) applyDefaults() {
 	if c.ZaiBaseURL == "" {
 		c.ZaiBaseURL = "https://api.z.ai/api"
 	}
+	if c.AntigravityBaseURL == "" {
+		c.AntigravityBaseURL = "https://generativelanguage.googleapis.com/v1beta"
+	}
 	if c.SessionIdleTimeout == 0 {
 		c.SessionIdleTimeout = 600 * time.Second
 	}
@@ -231,8 +242,8 @@ func (c *Config) applyDefaults() {
 // Validate checks the configuration for errors.
 func (c *Config) Validate() error {
 	// At least one provider must be configured
-	if c.SyntheticAPIKey == "" && c.ZaiAPIKey == "" && c.AnthropicToken == "" {
-		return fmt.Errorf("at least one provider must be configured: set SYNTHETIC_API_KEY, ZAI_API_KEY, or ANTHROPIC_TOKEN")
+	if c.SyntheticAPIKey == "" && c.ZaiAPIKey == "" && c.AnthropicToken == "" && c.AntigravityAPIKey == "" {
+		return fmt.Errorf("at least one provider must be configured: set SYNTHETIC_API_KEY, ZAI_API_KEY, ANTHROPIC_TOKEN, or ANTIGRAVITY_API_KEY")
 	}
 
 	// Validate Synthetic API key if provided
@@ -275,6 +286,9 @@ func (c *Config) AvailableProviders() []string {
 	if c.ZaiAPIKey != "" {
 		providers = append(providers, "zai")
 	}
+	if c.AntigravityAPIKey != "" {
+		providers = append(providers, "antigravity")
+	}
 	return providers
 }
 
@@ -287,6 +301,8 @@ func (c *Config) HasProvider(name string) bool {
 		return c.ZaiAPIKey != ""
 	case "anthropic":
 		return c.AnthropicToken != ""
+	case "antigravity":
+		return c.AntigravityAPIKey != ""
 	}
 	return false
 }
@@ -301,6 +317,9 @@ func (c *Config) HasMultipleProviders() bool {
 		count++
 	}
 	if c.AnthropicToken != "" {
+		count++
+	}
+	if c.AntigravityAPIKey != "" {
 		count++
 	}
 	return count > 1
@@ -334,6 +353,11 @@ func (c *Config) String() string {
 	if c.AnthropicAutoToken {
 		fmt.Fprintf(&sb, "  AnthropicAutoToken: true,\n")
 	}
+
+	// Redact Antigravity API key
+	antigravityDisplay := redactAPIKey(c.AntigravityAPIKey, "")
+	fmt.Fprintf(&sb, "  AntigravityAPIKey: %s,\n", antigravityDisplay)
+	fmt.Fprintf(&sb, "  AntigravityBaseURL: %s,\n", c.AntigravityBaseURL)
 
 	fmt.Fprintf(&sb, "  PollInterval: %v,\n", c.PollInterval)
 	fmt.Fprintf(&sb, "  SessionIdleTimeout: %v,\n", c.SessionIdleTimeout)

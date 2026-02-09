@@ -548,6 +548,12 @@ func run() error {
 		logger.Info("Anthropic API client configured")
 	}
 
+	var antigravityClient *api.AntigravityClient
+	if cfg.HasProvider("antigravity") {
+		antigravityClient = api.NewAntigravityClient(cfg.AntigravityAPIKey, logger)
+		logger.Info("Antigravity API client configured", "base_url", cfg.AntigravityBaseURL)
+	}
+
 	// Create components
 	tr := tracker.New(db, logger)
 
@@ -594,6 +600,18 @@ func run() error {
 		})
 	}
 
+	// Create Antigravity tracker
+	var antigravityTr *tracker.AntigravityTracker
+	if cfg.HasProvider("antigravity") {
+		antigravityTr = tracker.NewAntigravityTracker(db, logger)
+	}
+
+	var antigravityAg *agent.AntigravityAgent
+	if antigravityClient != nil {
+		antigravitySm := agent.NewSessionManager(db, "antigravity", idleTimeout, logger)
+		antigravityAg = agent.NewAntigravityAgent(antigravityClient, db, antigravityTr, cfg.PollInterval, logger, antigravitySm)
+	}
+
 	// Create notification engine
 	notifier := notify.New(db, logger)
 	notifier.SetEncryptionKey(deriveEncryptionKey(cfg.AdminPassHash))
@@ -610,6 +628,9 @@ func run() error {
 	}
 	if anthropicAg != nil {
 		anthropicAg.SetNotifier(notifier)
+	}
+	if antigravityAg != nil {
+		antigravityAg.SetNotifier(notifier)
 	}
 
 	// Wire polling checks — agents skip poll when telemetry disabled
@@ -638,6 +659,9 @@ func run() error {
 	if anthropicAg != nil {
 		anthropicAg.SetPollingCheck(func() bool { return isPollingEnabled("anthropic") })
 	}
+	if antigravityAg != nil {
+		antigravityAg.SetPollingCheck(func() bool { return isPollingEnabled("antigravity") })
+	}
 
 	// Wire reset callbacks to trackers
 	tr.SetOnReset(func(quotaName string) {
@@ -651,6 +675,11 @@ func run() error {
 	if anthropicTr != nil {
 		anthropicTr.SetOnReset(func(quotaName string) {
 			notifier.Check(notify.QuotaStatus{Provider: "anthropic", QuotaKey: quotaName, ResetOccurred: true})
+		})
+	}
+	if antigravityTr != nil {
+		antigravityTr.SetOnReset(func(quotaName string) {
+			notifier.Check(notify.QuotaStatus{Provider: "antigravity", QuotaKey: quotaName, ResetOccurred: true})
 		})
 	}
 
@@ -672,7 +701,7 @@ func run() error {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start agents in goroutines (staggered to avoid SQLite contention on session creation)
-	agentErr := make(chan error, 3)
+	agentErr := make(chan error, 4)
 	if ag != nil {
 		go func() {
 			defer func() {
@@ -720,7 +749,23 @@ func run() error {
 		}()
 	}
 
-	if ag == nil && zaiAg == nil && anthropicAg == nil {
+	if antigravityAg != nil {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("Antigravity agent panicked", "panic", r)
+					agentErr <- fmt.Errorf("antigravity agent panic: %v", r)
+				}
+			}()
+			time.Sleep(600 * time.Millisecond) // stagger to avoid SQLite BUSY
+			logger.Info("Starting Antigravity agent", "interval", cfg.PollInterval)
+			if err := antigravityAg.Run(ctx); err != nil {
+				agentErr <- fmt.Errorf("antigravity agent error: %w", err)
+			}
+		}()
+	}
+
+	if ag == nil && zaiAg == nil && anthropicAg == nil && antigravityAg == nil {
 		logger.Info("No agents configured")
 	}
 
@@ -1091,6 +1136,9 @@ func printBanner(cfg *config.Config, version string) {
 			fmt.Println("║  API:       anthropic.com/usage      ║")
 		}
 	}
+	if cfg.HasProvider("antigravity") {
+		fmt.Println("║  API:       antigravity.io/usage     ║")
+	}
 
 	fmt.Printf("║  Polling:   every %s              ║\n", cfg.PollInterval)
 	fmt.Printf("║  Dashboard: http://localhost:%d    ║\n", cfg.Port)
@@ -1115,6 +1163,9 @@ func printBanner(cfg *config.Config, version string) {
 			label = "Anthropic (auto):  "
 		}
 		fmt.Printf("%s%s\n", label, redactAPIKey(cfg.AnthropicToken))
+	}
+	if cfg.HasProvider("antigravity") {
+		fmt.Printf("Antigravity Key:   %s\n", redactAPIKey(cfg.AntigravityAPIKey))
 	}
 	fmt.Println()
 }
@@ -1143,6 +1194,8 @@ func printHelp() {
 	fmt.Println("  ZAI_API_KEY            Z.ai API key")
 	fmt.Println("  ZAI_BASE_URL           Z.ai base URL (default: https://api.z.ai/api)")
 	fmt.Println("  ANTHROPIC_TOKEN         Anthropic token (auto-detected if not set)")
+	fmt.Println("  ANTIGRAVITY_API_KEY    Antigravity API key")
+	fmt.Println("  ANTIGRAVITY_BASE_URL   Antigravity base URL (default: https://api.antigravity.io/v1/usage)")
 	fmt.Println("  ONWATCH_POLL_INTERVAL   Polling interval in seconds")
 	fmt.Println("  ONWATCH_PORT            Dashboard HTTP port")
 	fmt.Println("  ONWATCH_ADMIN_USER      Dashboard admin username")
@@ -1168,8 +1221,8 @@ func printHelp() {
 	fmt.Println("  Test instances never kill production instances and vice versa.")
 	fmt.Println("  Use --db and --port to further isolate test from production.")
 	fmt.Println()
-	fmt.Println("Configure providers in .env file or environment variables.")
-	fmt.Println("At least one provider (Synthetic, Z.ai, or Anthropic) must be configured.")
+fmt.Println("Configure providers in .env file or environment variables.")
+	fmt.Println("At least one provider (Synthetic, Z.ai, Anthropic, or Antigravity) must be configured.")
 }
 
 func redactAPIKey(key string) string {

@@ -254,6 +254,50 @@ func (s *Store) createTables() error {
 		CREATE INDEX IF NOT EXISTS idx_anthropic_cycles_name_start ON anthropic_reset_cycles(quota_name, cycle_start);
 		CREATE INDEX IF NOT EXISTS idx_anthropic_cycles_name_active ON anthropic_reset_cycles(quota_name, cycle_end) WHERE cycle_end IS NULL;
 
+		-- Antigravity-specific tables (probe-based limit detection)
+		CREATE TABLE IF NOT EXISTS antigravity_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL DEFAULT 'antigravity',
+			captured_at TEXT NOT NULL,
+			available BOOLEAN NOT NULL DEFAULT 1,
+			status TEXT NOT NULL DEFAULT 'unknown',
+			latency_ms INTEGER NOT NULL DEFAULT 0,
+			last_limit_hit_at TEXT,
+			limit_hit_count_24h INTEGER NOT NULL DEFAULT 0,
+			estimated_reset_time TEXT,
+			current_tier TEXT NOT NULL DEFAULT 'unknown',
+			risk_level TEXT NOT NULL DEFAULT 'low'
+		);
+
+		CREATE TABLE IF NOT EXISTS antigravity_limit_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			http_status INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT NOT NULL DEFAULT '',
+			latency_ms INTEGER NOT NULL DEFAULT 0,
+			retry_after_sec INTEGER NOT NULL DEFAULT 0,
+			detected_tier TEXT NOT NULL DEFAULT 'unknown',
+			estimated_reset_time TEXT
+		);
+
+		CREATE TABLE IF NOT EXISTS antigravity_reset_cycles (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			quota_type TEXT NOT NULL,
+			cycle_start TEXT NOT NULL,
+			cycle_end TEXT,
+			next_reset TEXT,
+			peak_value INTEGER NOT NULL DEFAULT 0,
+			total_delta INTEGER NOT NULL DEFAULT 0
+		);
+
+		-- Antigravity indexes
+		CREATE INDEX IF NOT EXISTS idx_antigravity_snapshots_captured ON antigravity_snapshots(captured_at);
+		CREATE INDEX IF NOT EXISTS idx_antigravity_limit_events_timestamp ON antigravity_limit_events(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_antigravity_limit_events_type ON antigravity_limit_events(event_type);
+		CREATE INDEX IF NOT EXISTS idx_antigravity_cycles_type_start ON antigravity_reset_cycles(quota_type, cycle_start);
+		CREATE INDEX IF NOT EXISTS idx_antigravity_cycles_type_active ON antigravity_reset_cycles(quota_type, cycle_end) WHERE cycle_end IS NULL;
+
 		-- Notification log (dedup: one row per quota_key + notification_type)
 		CREATE TABLE IF NOT EXISTS notification_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
